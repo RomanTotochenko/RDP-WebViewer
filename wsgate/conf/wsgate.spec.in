@@ -1,0 +1,185 @@
+#
+# Spec file for package wsgate
+#
+# Copyright (c) 2012 Fritz Elfert <wsgate@fritz-elfert.de>
+#
+# All modifications and additions to the file contributed by third parties
+# remain the property of their copyright owners, unless otherwise agreed
+# upon. The license for this file, and modifications and additions to the
+# file, is the same license as for the pristine package itself (unless the
+# license for the pristine package is not an Open Source License, in which
+# case the license is the MIT License). An "Open Source License" is a
+# license that conforms to the Open Source Definition (Version 1.9)
+# published by the Open Source Initiative.
+ 
+%define rel @GITREV@%{?dist}
+
+##
+## OS detection
+##
+%if 0%{?opensuse_bs}
+%define is_el 0%{?centos_version}%{?rhel_version}
+%else
+%define is_el %(test -n "`echo %{?dist}|grep el`" && echo 1 || echo 0)
+%endif
+%define is_rh %(test -n "`echo %{?dist}|grep rh`" && echo 1 || echo 0)
+%define is_fc 0%{?fedora}%{?fedora_version}
+%define is_suse 0%{?suse_version}
+%define is_sles 0%{?sles_version}
+%define is_mdv 0%{?mdkversion}
+
+%if %{is_fc}
+%define systemddir /lib/systemd/system
+%endif
+%if %{is_suse} >= 1210
+%define systemddir /lib/systemd/system
+%endif
+
+Summary: FreeRDP-WebConnct gateway
+Name:    wsgate
+Version: @VERSION@
+Release: %{rel}
+License: Apache-2.0
+%if %{is_suse}
+Group: Productivity/Networking/Other
+%else
+Group: Network Servers
+%endif
+URL: https://github.com/FreeRDP/FreeRDP-WebConnect
+Source0: %{name}-%{version}.tar.gz
+%if 0%{?opensuse_bs}
+Source99: %{name}.rpmlintrc
+%endif
+BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(id -u -n)
+Buildrequires: openssl-devel, pcre-devel, boost-devel, ehs-devel, freerdp-devel, libpng-devel
+Buildrequires: doxygen, graphviz, automake, libtool, make, gcc-c++, java, perl
+
+%if %{is_fc}
+Buildrequires: elfutils-devel
+Buildrequires: systemd
+%endif
+%if %{is_suse}
+%if %{is_suse} > 1130
+Buildrequires: libdw-devel
+%endif
+%if %{is_suse} >= 1210
+BuildRequires: systemd
+%endif
+%endif
+
+Requires: logrotate, perl
+%if %{is_suse}
+PreReq: pwdutils
+PreReq: %{insserv_prereq}
+PreReq: %{fillup_prereq}
+%endif
+
+%description
+A WebSockets gateway for FreeRDP-WebConnect
+
+%prep
+%setup -q
+
+%build
+%configure --enable-warn
+%{__make} %{?_smp_mflags} V=1
+
+%install
+%{__make} DESTDIR=%{buildroot} install inst-logrotate inst-varrun
+%if %{is_el}%{is_fc}
+%{__make} DESTDIR=%{buildroot} inst-rsyslog
+%endif
+%if %{is_el}
+%{__make} DESTDIR=%{buildroot} INITRDDIR=%{_initrddir} inst-rhinit
+%endif
+%if %{is_fc}
+%{__make} DESTDIR=%{buildroot} SYSTEMDDIR=%{systemddir} inst-systemd
+%endif
+%if %{is_suse}
+%{__make} DESTDIR=%{buildroot} INITRDDIR=%{_initrddir} inst-suseinit
+%endif
+
+%clean
+%{__rm} -rf %{buildroot}
+
+%pre
+getent group wsgate >/dev/null || groupadd -r wsgate || :
+getent passwd wsgate >/dev/null || \
+  useradd -c "FreeRDP WebConnect Gateway" -g wsgate -s /sbin/nologin \
+  -s /sbin/nologin -r -d /var/empty/wsgate wsgate 2> /dev/null || :
+
+%if %{is_fc}
+%post
+if [ $1 -eq 1 ] ; then
+    /bin/systemctl enable wsgate.service >/dev/null 2>&1 || :
+fi
+
+%preun
+if [ $1 -eq 0 ] ; then
+    # Package removal, not upgrade
+    /bin/systemctl --no-reload disable wsgate.service > /dev/null 2>&1 || :
+    /bin/systemctl stop wsgate.service > /dev/null 2>&1 || :
+fi
+
+%postun
+/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ] ; then
+    # Package upgrade, not uninstall
+    /bin/systemctl try-restart wsgate.service >/dev/null 2>&1 || :
+fi
+%endif
+
+%if %{is_el}
+%post
+if [ $1 -eq 1 ] ; then
+    /sbin/chkconfig --add wsgate
+fi
+
+%preun
+if [ $1 -eq 0 ] ; then
+    # Package removal, not upgrade
+    /sbin/chkconfig --del wsgate
+fi
+
+%postun
+if [ $1 -ge 1 ] ; then
+    # Package upgrade, not uninstall
+    /sbin/service wsgate condrestart
+fi
+%endif
+
+%if %{is_suse}
+%post
+%{fillup_and_insserv -f -y wsgate}
+
+%preun
+%stop_on_removal wsgate
+
+%postun
+%restart_on_update wsgate
+%insserv_cleanup
+%endif
+
+%files
+%defattr(-,root,root,-)
+%{_sbindir}/*
+%{_datadir}/*
+%config(noreplace) %{_sysconfdir}/logrotate.d/wsgate
+%config(noreplace) %{_sysconfdir}/wsgate.ini
+%{_sysconfdir}/wsgate.ini.sample
+%if %{is_el}%{is_fc}
+%config(noreplace) %{_sysconfdir}/rsyslog.d/wsgate.conf
+%endif
+%if %{is_fc}
+%{systemddir}/*
+%else
+%{_initrddir}/wsgate
+%endif
+%ghost /var/run/%{name}
+%defattr(0755,root,root,-)
+%dir %{_libexecdir}/%{name}
+%{_libexecdir}/%{name}/keygen.sh
+%defattr(4754,root,wsgate,-)
+%{_libexecdir}/%{name}/bindhelper
+
+%changelog
